@@ -48,19 +48,19 @@ func Connect(network, addr, user, database string) (*Conn, error) {
 	}
 	return &Conn{conn: conn}, nil
 }
-func getMessage(conn net.Conn) (*Message, error) {
+func getMessage(conn net.Conn) (Message, error) {
 	header, err := ReadExactly(conn, 5)
 
 	if err != nil {
-		return nil, err
+		return Message{}, err
 	}
 	msgType := header[0]
 	payloadLen := binary.BigEndian.Uint32(header[1:5])
 	payload, err := ReadExactly(conn, int(payloadLen)-4) // length includes the 4-byte length field
 	if err != nil {
-		return nil, err
+		return Message{}, err
 	}
-	return &Message{Type: msgType, payload: payload, Length: payloadLen}, nil
+	return Message{Type: msgType, payload: payload, Length: payloadLen}, nil
 }
 func ReadExactly(conn net.Conn, n int) ([]byte, error) {
 	buff := make([]byte, n)
