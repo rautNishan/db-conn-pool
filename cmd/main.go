@@ -1,7 +1,14 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	dbconnpool "github.com/rautNishan/db-conn-pool"
+)
 
 func main() {
-	fmt.Println("This is test")
+	_, err := dbconnpool.Connect("tcp", "localhost:5432", "postgres", "test")
+	if err != nil {
+		fmt.Println(err)
+	}
 }
