@@ -7,8 +7,9 @@ import (
 )
 
 func main() {
-	_, err := dbconnpool.Connect("tcp", "localhost:5432", "postgres", "test")
+	conn, err := dbconnpool.Connect("tcp", "localhost:5432", "postgres", "test")
 	if err != nil {
 		fmt.Println(err)
 	}
+	fmt.Println("This is connection: ", conn)
 }

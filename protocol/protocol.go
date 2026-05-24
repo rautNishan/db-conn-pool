@@ -2,6 +2,8 @@ package protocol
 
 import (
 	"encoding/binary"
+	"fmt"
+	"net"
 )
 
 func StartUp(user, database string) []byte {
@@ -22,3 +24,19 @@ func StartUp(user, database string) []byte {
 	buffer = append(buffer, payload...)
 	return buffer
 }
+
+func ReadExactly(conn net.Conn, n int) ([]byte, error) {
+	buff := make([]byte, n)
+	total := 0
+	for total < n {
+		read, err := conn.Read(buff[total:])
+		if err != nil {
+			fmt.Println("Erro while reading: ", err)
+			return nil, err
+		}
+		total += read
+	}
+	return buff, nil
+}
+
+func AuthenticationClearPassword() {}
