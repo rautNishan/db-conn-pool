@@ -11,5 +11,5 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println("This is connection: ", conn)
+	fmt.Printf("Connection: %+v\n", conn)
 }

@@ -1,1 +1,3 @@
 package dbconnpool
+
+func AuthenticationClearPassword() {}

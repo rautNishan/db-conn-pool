@@ -1,10 +1,6 @@
-package protocol
+package dbconnpool
 
-import (
-	"encoding/binary"
-	"fmt"
-	"net"
-)
+import "encoding/binary"
 
 func StartUp(user, database string) []byte {
 	// A zero byte is required as a terminator after the last name/value pair. (https://www.postgresql.org/docs/current/protocol-message-formats.html)
@@ -24,19 +20,3 @@ func StartUp(user, database string) []byte {
 	buffer = append(buffer, payload...)
 	return buffer
 }
-
-func ReadExactly(conn net.Conn, n int) ([]byte, error) {
-	buff := make([]byte, n)
-	total := 0
-	for total < n {
-		read, err := conn.Read(buff[total:])
-		if err != nil {
-			fmt.Println("Erro while reading: ", err)
-			return nil, err
-		}
-		total += read
-	}
-	return buff, nil
-}
-
-func AuthenticationClearPassword() {}
