@@ -27,7 +27,7 @@ type BeKeyData struct {
 	SecretKey uint32
 }
 type Conn struct {
-	conn           net.Conn
+	NetConn        net.Conn //Only for testing
 	BackendKeyData BeKeyData
 	Params         []string
 	TxStatus       byte
@@ -38,7 +38,7 @@ func Connect(network, addr, user, database string) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	returnConn := &Conn{conn: conn} //No need to expose this in client side
+	returnConn := &Conn{NetConn: conn} //No need to expose this in client side
 	_, err = conn.Write(StartUp(user, database))
 	if err != nil {
 		return nil, err
@@ -70,6 +70,9 @@ func Connect(network, addr, user, database string) (*Conn, error) {
 			value := msg.Payload[0]
 			returnConn.TxStatus = value
 			return returnConn, nil
+		case byte(ErrorResponse):
+			fmt.Println("Error response message")
+			return nil, fmt.Errorf("Error response in message")
 		default:
 			// If the frontend does not support the authentication method requested by the server,
 			// then it should immediately close the connection.

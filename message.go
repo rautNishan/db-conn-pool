@@ -19,6 +19,7 @@ const (
 	ParameterStatus MessageType = 'S'
 	BackendKeyData  MessageType = 'K'
 	ReadyForQuery   MessageType = 'Z'
+	ErrorResponse   MessageType = 'E'
 )
 
 func getMessage(conn net.Conn) (Message, error) {

@@ -12,4 +12,5 @@ func main() {
 		fmt.Println(err)
 	}
 	fmt.Printf("Connection: %+v\n", conn)
+	dbconnpool.SimpleQuery("SELECT 1", conn.NetConn)
 }
