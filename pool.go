@@ -1,12 +1,23 @@
 package dbconnpool
 
+type Config struct {
+	Address  string
+	Netwrok  string
+	User     string
+	Password string
+	Database string
+}
 type DbPool struct {
-	minConn uint32
-	maxConn uint32
+	idelConn   []Conn
+	totalConn  []Conn
+	activeConn []Conn
 }
 
-func Init() {
+func Init(config Config) {
 
 }
 
 func (dbpool *DbPool) GetConnection() {}
+
+func (DbPool *DbPool) Query() {
+}
