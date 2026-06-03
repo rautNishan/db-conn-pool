@@ -33,7 +33,7 @@ type Conn struct {
 	NetConn        net.Conn //Only for testing
 }
 
-func Connect(network, addr, user, database string) (*Conn, error) {
+func connect(network, addr, user, database string) (*Conn, error) {
 
 	conn, err := net.Dial(network, addr)
 	if err != nil {
