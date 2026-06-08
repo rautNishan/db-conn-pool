@@ -1,9 +1,8 @@
 package dbconnpool
 
 import (
-	"encoding/binary"
-	"fmt"
 	"net"
+	"time"
 )
 
 type AuthType uint32
@@ -33,52 +32,17 @@ type Conn struct {
 	NetConn        net.Conn //Only for testing
 }
 
-func connect(network, addr, user, database string) (*Conn, error) {
-
-	conn, err := net.Dial(network, addr)
+func (conn *Conn) isAlive() bool {
+	conn.NetConn.SetDeadline(time.Now().Add(1 * time.Millisecond))
+	defer conn.NetConn.SetReadDeadline(time.Time{})
+	buff := make([]byte, 1)
+	_, err := conn.NetConn.Read(buff)
 	if err != nil {
-		return nil, err
-	}
-	returnConn := &Conn{NetConn: conn} //No need to expose this in client side
-	_, err = conn.Write(StartUp(user, database))
-	if err != nil {
-		return nil, err
-	}
-	for {
-		msg, err := getMessage(conn)
-		if err != nil {
-			conn.Close()
-			return nil, err
+		//if time out error then conn is stil alive
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return true
 		}
-		switch msg.Type {
-		case byte(MsgAuthRequest):
-			authType := binary.BigEndian.Uint32(msg.Payload)
-			switch AuthType(authType) {
-			case AuthenticationOk:
-				fmt.Println("Auth okay")
-			case AuthenticationKerberosV5:
-				continue //Need to implement later
-			default:
-				return nil, fmt.Errorf("unsupported auth type: %d", authType)
-			}
-		case byte(ParameterStatus):
-			str := string(msg.Payload)
-			returnConn.Params = append(returnConn.Params, str)
-		case byte(BackendKeyData):
-			returnConn.BackendKeyData.ProcessID = binary.BigEndian.Uint32(msg.Payload[:4])
-			returnConn.BackendKeyData.SecretKey = binary.BigEndian.Uint32(msg.Payload[4:])
-		case byte(ReadyForQuery):
-			value := msg.Payload[0]
-			returnConn.TxStatus = value
-			return returnConn, nil
-		case byte(ErrorResponse):
-			fmt.Println("Error response message")
-			return nil, fmt.Errorf("Error response in message")
-		default:
-			// If the frontend does not support the authentication method requested by the server,
-			// then it should immediately close the connection.
-			conn.Close()
-			return nil, fmt.Errorf("unsupported message type: %d", msg.Type)
-		}
+		return false
 	}
+	return true
 }
