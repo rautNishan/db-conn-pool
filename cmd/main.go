@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"unsafe"
 
 	dbconnpool "github.com/rautNishan/db-conn-pool"
 )
@@ -20,9 +19,11 @@ func main() {
 		Address:  "localhost:5432",
 		User:     "postgres",
 		Database: "test",
+		MinConn:  1,
+		MaxConn:  1,
 	})
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println(unsafe.Sizeof(pool))
+	fmt.Println("No issue: ", pool)
 }
