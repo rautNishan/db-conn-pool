@@ -25,5 +25,15 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 	}
-	fmt.Println("No issue: ", pool)
+	conn, err := pool.GetConnetion()
+	if err != nil {
+		fmt.Println("First Error: ", err)
+	}
+	fmt.Println("This is connection", conn)
+	conn2, err := pool.GetConnetion()
+	if err != nil {
+		fmt.Println("Second Error: ", err)
+	}
+	fmt.Println("This is connection", conn2)
+
 }

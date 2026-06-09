@@ -4,31 +4,34 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 )
 
 type Config struct {
-	Address  string
-	Netwrok  string
-	User     string
-	Password string
-	Database string
-	MinConn  uint32
-	MaxConn  uint32
+	Address          string
+	Netwrok          string
+	User             string
+	Password         string
+	Database         string
+	MinConn          uint32
+	MaxConn          uint32
+	IdealConnTimeOut uint32
 }
 
 type DbPool struct {
 	totalConn  uint32
 	idelConn   chan *Conn
 	activeConn map[*Conn]struct{}
-	// idealConnTimeOut
-	config Config
+	config     Config
+	mutx       sync.Mutex
 }
 
 func Init(config Config) (*DbPool, error) {
 	pool := &DbPool{
 		idelConn:   make(chan *Conn, config.MaxConn),
 		activeConn: make(map[*Conn]struct{}),
+		config:     config,
 	}
 
 	//First make connection of min size (Lazy loading)
@@ -43,17 +46,20 @@ func Init(config Config) (*DbPool, error) {
 }
 
 func (DbPool *DbPool) createConnect() (*Conn, error) {
+	if DbPool.totalConn >= DbPool.config.MaxConn {
+		return nil, fmt.Errorf("Max connection reached")
+	}
 	conn, err := net.Dial(DbPool.config.Netwrok, DbPool.config.Address)
 	if err != nil {
 		return nil, err
 	}
 	returnConn := &Conn{NetConn: conn} //No need to expose this in client side
-	_, err = conn.Write(StartUp(DbPool.config.User, DbPool.config.Database))
+	_, err = returnConn.NetConn.Write(StartUp(DbPool.config.User, DbPool.config.Database))
 	if err != nil {
 		return nil, err
 	}
 	for {
-		msg, err := getMessage(conn)
+		msg, err := returnConn.getMessage()
 		if err != nil {
 			conn.Close()
 			return nil, err
@@ -78,6 +84,7 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 		case byte(ReadyForQuery):
 			value := msg.Payload[0]
 			returnConn.TxStatus = value
+			returnConn.readyForQuery = true
 			atomic.AddUint32(&DbPool.totalConn, 1)
 			return returnConn, nil
 		case byte(ErrorResponse):
@@ -86,24 +93,43 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 		default:
 			// If the frontend does not support the authentication method requested by the server,
 			// then it should immediately close the connection.
-			conn.Close()
+			returnConn.NetConn.Close()
 			return nil, fmt.Errorf("unsupported message type: %d", msg.Type)
 		}
 	}
 }
 
 func (DbPool *DbPool) GetConnetion() (*Conn, error) {
-	conn := <-DbPool.idelConn
+	var conn *Conn
+	var err error
+	if len(DbPool.idelConn) == 0 {
+		conn, err = DbPool.createConnect()
+	} else {
+		conn = <-DbPool.idelConn
+	}
 	if !conn.isAlive() {
 		//Close the connection
-		DbPool.releaseConn(conn)
-		conn, err := DbPool.createConnect()
+		DbPool.closeConn(conn)
+		conn, err = DbPool.createConnect()
 		if err != nil {
 			return DbPool.GetConnetion()
 		}
-		return conn, nil
 	}
+
+	//Clouse attatch this function to connection type
+	// So Release can have these
+	conn.release = func(healthy bool) {
+		DbPool.removeConnFromActive(conn)
+		if healthy {
+			DbPool.idelConn <- conn
+		} else {
+			DbPool.closeConn(conn)
+		}
+	}
+
+	DbPool.mutx.Lock()
 	DbPool.activeConn[conn] = struct{}{}
+	DbPool.mutx.Unlock()
 	return conn, nil
 }
 
@@ -112,11 +138,17 @@ func (DbPool *DbPool) isActiveConn(conn *Conn) bool {
 	return ok
 }
 
-func (DbPool *DbPool) releaseConn(conn *Conn) error {
+func (DbPool *DbPool) closeConn(conn *Conn) error {
 	err := conn.NetConn.Close()
 	if err != nil {
 		return err
 	}
 	atomic.AddUint32(&DbPool.totalConn, ^uint32(0)) //-1
 	return nil
+}
+
+func (DbPool *DbPool) removeConnFromActive(conn *Conn) {
+	DbPool.mutx.Lock()
+	delete(DbPool.activeConn, conn)
+	DbPool.mutx.Unlock()
 }
