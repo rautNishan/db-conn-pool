@@ -92,7 +92,6 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 			value := msg.Payload[0]
 			returnConn.TxStatus = value
 			returnConn.readyForQuery = true
-			returnConn.timeOut = time.Now().Add(DbPool.config.IdealConnTimeOut)
 			atomic.AddUint32(&DbPool.totalConn, 1)
 			return returnConn, nil
 		case byte(ErrorResponse):
@@ -116,14 +115,12 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 		if err != nil {
 			if errors.Is(err, ErrMaxConnection) {
 				conn = <-DbPool.idelConn
-				conn.timeOut = time.Now().Add(DbPool.config.IdealConnTimeOut)
 			} else {
 				return nil, err
 			}
 		}
 	} else {
 		conn = <-DbPool.idelConn
-		conn.timeOut = time.Now().Add(DbPool.config.IdealConnTimeOut)
 	}
 
 	if !conn.isAlive() {
@@ -146,6 +143,7 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 		}
 	}
 	DbPool.putInActiveConn(conn)
+	conn.addTimeOuts(DbPool.config.IdealConnTimeOut)
 	return conn, nil
 }
 

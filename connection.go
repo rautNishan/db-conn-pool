@@ -115,3 +115,7 @@ func (conn *Conn) Release() {
 		}
 	}
 }
+
+func (conn *Conn) addTimeOuts(t time.Duration) {
+	conn.timeOut = time.Now().Add(time.Second)
+}
