@@ -49,6 +49,7 @@ type Conn struct {
 	NetConn        net.Conn //Only for testing
 	release        func(healthy bool)
 	readyForQuery  bool
+	timeOut        time.Time
 }
 
 func (conn *Conn) isAlive() bool {

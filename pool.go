@@ -2,10 +2,12 @@ package dbconnpool
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type Config struct {
@@ -16,7 +18,7 @@ type Config struct {
 	Database         string
 	MinConn          uint32
 	MaxConn          uint32
-	IdealConnTimeOut uint32
+	IdealConnTimeOut time.Duration //in Seconds
 }
 
 type DbPool struct {
@@ -27,13 +29,17 @@ type DbPool struct {
 	mutx       sync.Mutex
 }
 
+var ErrMaxConnection = errors.New("max connection reached")
+
 func Init(config Config) (*DbPool, error) {
 	pool := &DbPool{
 		idelConn:   make(chan *Conn, config.MaxConn),
 		activeConn: make(map[*Conn]struct{}),
 		config:     config,
 	}
-
+	if pool.config.IdealConnTimeOut == 0 {
+		pool.config.IdealConnTimeOut = 60 * time.Second
+	}
 	//First make connection of min size (Lazy loading)
 	for i := 0; i < int(config.MinConn); i++ {
 		conn, err := pool.createConnect()
@@ -42,12 +48,13 @@ func Init(config Config) (*DbPool, error) {
 		}
 		pool.idelConn <- conn
 	}
+	go pool.listenToTimeOuts()
 	return pool, nil
 }
 
 func (DbPool *DbPool) createConnect() (*Conn, error) {
 	if DbPool.totalConn >= DbPool.config.MaxConn {
-		return nil, fmt.Errorf("Max connection reached")
+		return nil, ErrMaxConnection
 	}
 	conn, err := net.Dial(DbPool.config.Netwrok, DbPool.config.Address)
 	if err != nil {
@@ -85,6 +92,7 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 			value := msg.Payload[0]
 			returnConn.TxStatus = value
 			returnConn.readyForQuery = true
+			returnConn.timeOut = time.Now().Add(DbPool.config.IdealConnTimeOut)
 			atomic.AddUint32(&DbPool.totalConn, 1)
 			return returnConn, nil
 		case byte(ErrorResponse):
@@ -102,11 +110,22 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 	var conn *Conn
 	var err error
+	fmt.Println("len: ", len(DbPool.idelConn))
 	if len(DbPool.idelConn) == 0 {
 		conn, err = DbPool.createConnect()
+		if err != nil {
+			if errors.Is(err, ErrMaxConnection) {
+				conn = <-DbPool.idelConn
+				conn.timeOut = time.Now().Add(DbPool.config.IdealConnTimeOut)
+			} else {
+				return nil, err
+			}
+		}
 	} else {
 		conn = <-DbPool.idelConn
+		conn.timeOut = time.Now().Add(DbPool.config.IdealConnTimeOut)
 	}
+
 	if !conn.isAlive() {
 		//Close the connection
 		DbPool.closeConn(conn)
@@ -116,7 +135,7 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 		}
 	}
 
-	//Clouse attatch this function to connection type
+	//Clouse (Whats being assigned) attatch this function to connection type
 	// So Release can have these
 	conn.release = func(healthy bool) {
 		DbPool.removeConnFromActive(conn)
@@ -126,16 +145,8 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 			DbPool.closeConn(conn)
 		}
 	}
-
-	DbPool.mutx.Lock()
-	DbPool.activeConn[conn] = struct{}{}
-	DbPool.mutx.Unlock()
+	DbPool.putInActiveConn(conn)
 	return conn, nil
-}
-
-func (DbPool *DbPool) isActiveConn(conn *Conn) bool {
-	_, ok := DbPool.activeConn[conn]
-	return ok
 }
 
 func (DbPool *DbPool) closeConn(conn *Conn) error {
@@ -151,4 +162,34 @@ func (DbPool *DbPool) removeConnFromActive(conn *Conn) {
 	DbPool.mutx.Lock()
 	delete(DbPool.activeConn, conn)
 	DbPool.mutx.Unlock()
+}
+
+func (DbPool *DbPool) putInActiveConn(conn *Conn) {
+	DbPool.mutx.Lock()
+	DbPool.activeConn[conn] = struct{}{}
+	DbPool.mutx.Unlock()
+}
+
+func (DbPool *DbPool) listenToTimeOuts() {
+	interval := time.Second * DbPool.config.IdealConnTimeOut / 2
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for range ticker.C {
+		fmt.Println("Checking in interval of: ", interval)
+		now := time.Now()
+		var expired []*Conn
+		DbPool.mutx.Lock()
+		for key := range DbPool.activeConn {
+			if now.After(key.timeOut) {
+				expired = append(expired, key)
+			}
+		}
+		DbPool.mutx.Unlock()
+		for _, c := range expired {
+			fmt.Println("Freeing the connection")
+			c.Release()
+		}
+
+	}
+
 }
