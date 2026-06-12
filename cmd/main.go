@@ -31,8 +31,6 @@ func main() {
 		fmt.Println("First Error: ", err)
 	}
 	fmt.Printf("This is connection: %v\n", conn)
-	conn.Release()
-	fmt.Println("Connection Released")
 	conn2, err := pool.GetConnetion()
 	if err != nil {
 		fmt.Println("Second Error: ", err)

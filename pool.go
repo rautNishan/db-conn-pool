@@ -32,6 +32,17 @@ type DbPool struct {
 var ErrMaxConnection = errors.New("max connection reached")
 
 func Init(config Config) (*DbPool, error) {
+	if config.MinConn == 0 {
+		config.MinConn = 1
+	}
+	if config.MaxConn == 0 {
+		config.MaxConn = 10
+	}
+
+	if config.MinConn > config.MaxConn {
+		return nil, fmt.Errorf("Min is greater than max conn")
+	}
+
 	pool := &DbPool{
 		idelConn:   make(chan *Conn, config.MaxConn),
 		activeConn: make(map[*Conn]struct{}),
@@ -39,6 +50,8 @@ func Init(config Config) (*DbPool, error) {
 	}
 	if pool.config.IdealConnTimeOut == 0 {
 		pool.config.IdealConnTimeOut = 60 * time.Second
+	} else {
+		pool.config.IdealConnTimeOut = pool.config.IdealConnTimeOut * time.Second
 	}
 	//First make connection of min size (Lazy loading)
 	for i := 0; i < int(config.MinConn); i++ {
@@ -53,7 +66,9 @@ func Init(config Config) (*DbPool, error) {
 }
 
 func (DbPool *DbPool) createConnect() (*Conn, error) {
-	if DbPool.totalConn >= DbPool.config.MaxConn {
+	atomic.AddUint32(&DbPool.totalConn, 1)
+	if DbPool.totalConn > DbPool.config.MaxConn {
+		atomic.AddUint32(&DbPool.totalConn, ^uint32(0))
 		return nil, ErrMaxConnection
 	}
 	conn, err := net.Dial(DbPool.config.Netwrok, DbPool.config.Address)
@@ -80,6 +95,7 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 			case AuthenticationKerberosV5:
 				continue //Need to implement later
 			default:
+				DbPool.closeConn(returnConn)
 				return nil, fmt.Errorf("unsupported auth type: %d", authType)
 			}
 		case byte(ParameterStatus):
@@ -91,11 +107,9 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 		case byte(ReadyForQuery):
 			value := msg.Payload[0]
 			returnConn.TxStatus = value
-			returnConn.readyForQuery = true
-			atomic.AddUint32(&DbPool.totalConn, 1)
 			return returnConn, nil
 		case byte(ErrorResponse):
-			fmt.Println("Error response message")
+			DbPool.closeConn(returnConn)
 			return nil, fmt.Errorf("Error response in message")
 		default:
 			// If the frontend does not support the authentication method requested by the server,
@@ -104,13 +118,15 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 			return nil, fmt.Errorf("unsupported message type: %d", msg.Type)
 		}
 	}
+
 }
 
 func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 	var conn *Conn
 	var err error
-	fmt.Println("len: ", len(DbPool.idelConn))
-	if len(DbPool.idelConn) == 0 {
+	select {
+	case conn = <-DbPool.idelConn:
+	default:
 		conn, err = DbPool.createConnect()
 		if err != nil {
 			if errors.Is(err, ErrMaxConnection) {
@@ -119,27 +135,28 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 				return nil, err
 			}
 		}
-	} else {
-		conn = <-DbPool.idelConn
 	}
 
 	if !conn.isAlive() {
 		//Close the connection
 		DbPool.closeConn(conn)
+		DbPool.mutx.Lock()
 		conn, err = DbPool.createConnect()
+		DbPool.mutx.Unlock()
 		if err != nil {
 			return DbPool.GetConnetion()
 		}
 	}
-
 	//Clouse (Whats being assigned) attatch this function to connection type
 	// So Release can have these
 	conn.release = func(healthy bool) {
 		DbPool.removeConnFromActive(conn)
 		if healthy {
 			DbPool.idelConn <- conn
+			return
 		} else {
 			DbPool.closeConn(conn)
+			return
 		}
 	}
 	DbPool.putInActiveConn(conn)
@@ -169,11 +186,10 @@ func (DbPool *DbPool) putInActiveConn(conn *Conn) {
 }
 
 func (DbPool *DbPool) listenToTimeOuts() {
-	interval := time.Second * DbPool.config.IdealConnTimeOut / 2
+	interval := DbPool.config.IdealConnTimeOut / 2
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for range ticker.C {
-		fmt.Println("Checking in interval of: ", interval)
 		now := time.Now()
 		var expired []*Conn
 		DbPool.mutx.Lock()
@@ -184,7 +200,6 @@ func (DbPool *DbPool) listenToTimeOuts() {
 		}
 		DbPool.mutx.Unlock()
 		for _, c := range expired {
-			fmt.Println("Freeing the connection")
 			c.Release()
 		}
 

@@ -9,11 +9,12 @@ import (
 
 // Message pg sends
 const (
-	MsgAuthRequest  MessageType = 'R'
-	ParameterStatus MessageType = 'S'
-	BackendKeyData  MessageType = 'K'
-	ReadyForQuery   MessageType = 'Z'
-	ErrorResponse   MessageType = 'E'
+	MsgAuthRequest     MessageType = 'R'
+	ParameterStatus    MessageType = 'S'
+	BackendKeyData     MessageType = 'K'
+	ReadyForQuery      MessageType = 'Z'
+	ErrorResponse      MessageType = 'E'
+	EmptyQueryResponse MessageType = 'I'
 )
 
 type Message struct {
@@ -48,7 +49,6 @@ type Conn struct {
 	BackendKeyData BeKeyData
 	NetConn        net.Conn //Only for testing
 	release        func(healthy bool)
-	readyForQuery  bool
 	timeOut        time.Time
 }
 
@@ -97,8 +97,7 @@ func (conn *Conn) readExactly(n int) ([]byte, error) {
 }
 
 func (conn *Conn) Release() {
-	if conn.readyForQuery {
-		conn.readyForQuery = false
+	if conn.TxStatus == byte(EmptyQueryResponse) {
 		conn.release(true)
 		return
 	}
@@ -109,7 +108,7 @@ func (conn *Conn) Release() {
 			conn.release(false)
 			return
 		}
-		if msg.Type == byte(ReadyForQuery) {
+		if msg.Type == byte(EmptyQueryResponse) {
 			conn.release(true)
 			return
 		}
