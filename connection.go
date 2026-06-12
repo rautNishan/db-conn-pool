@@ -118,3 +118,13 @@ func (conn *Conn) Release() {
 func (conn *Conn) addTimeOuts(t time.Duration) {
 	conn.timeOut = time.Now().Add(time.Second)
 }
+
+func (conn *Conn) Query(query string) {
+	msgLen := 4 + len(query) + 1     // length field itself + query + null terminator
+	buf := make([]byte, 0, msgLen+1) //+1 for message type
+	buf = append(buf, 'Q')
+	buf = binary.BigEndian.AppendUint32(buf, uint32(msgLen))
+	buf = append(buf, []byte(query)...)
+	buf = append(buf, 0) // Null terminator
+	conn.NetConn.Write(buf)
+}
