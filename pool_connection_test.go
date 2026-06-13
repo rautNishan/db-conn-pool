@@ -393,7 +393,7 @@ func TestReleaseUnhealthy(t *testing.T) {
 		len(pool.activeConn), len(pool.idelConn), pool.totalConn)
 
 	// Simulate a broken connection by closing the underlying socket.
-	conn.NetConn.Close()
+	conn.netConn.Close()
 
 	idleBefore := len(pool.idelConn)
 	totalBefore := pool.totalConn
@@ -437,7 +437,7 @@ func TestIsAlive(t *testing.T) {
 	t.Log("isAlive true: OK")
 
 	// Close the socket and verify the method detects it.
-	conn.NetConn.Close()
+	conn.netConn.Close()
 	if conn.isAlive() {
 		t.Fatal("expected isAlive()=false after NetConn.Close()")
 	}

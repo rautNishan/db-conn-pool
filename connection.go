@@ -44,19 +44,19 @@ type BeKeyData struct {
 	SecretKey uint32
 }
 type Conn struct {
-	TxStatus       byte
-	Params         []string
-	BackendKeyData BeKeyData
-	NetConn        net.Conn //Only for testing
+	txStatus       byte
+	params         []string
+	backendKeyData BeKeyData
+	netConn        net.Conn //Only for testing
 	release        func(healthy bool)
 	timeOut        time.Time
 }
 
 func (conn *Conn) isAlive() bool {
-	conn.NetConn.SetDeadline(time.Now().Add(1 * time.Millisecond))
-	defer conn.NetConn.SetReadDeadline(time.Time{})
+	conn.netConn.SetDeadline(time.Now().Add(1 * time.Millisecond))
+	defer conn.netConn.SetReadDeadline(time.Time{})
 	buff := make([]byte, 1)
-	_, err := conn.NetConn.Read(buff)
+	_, err := conn.netConn.Read(buff)
 	if err != nil {
 		//if time out error then conn is stil alive
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -86,7 +86,7 @@ func (conn *Conn) readExactly(n int) ([]byte, error) {
 	buff := make([]byte, n)
 	total := 0
 	for total < n {
-		read, err := conn.NetConn.Read(buff[total:])
+		read, err := conn.netConn.Read(buff[total:])
 		if err != nil {
 			fmt.Println("Erro while reading: ", err)
 			return nil, err
@@ -97,7 +97,7 @@ func (conn *Conn) readExactly(n int) ([]byte, error) {
 }
 
 func (conn *Conn) Release() {
-	if conn.TxStatus == byte(EmptyQueryResponse) {
+	if conn.txStatus == byte(EmptyQueryResponse) {
 		if conn.isAlive() {
 			conn.release(true)
 		} else {
@@ -130,5 +130,6 @@ func (conn *Conn) Query(query string) {
 	buf = binary.BigEndian.AppendUint32(buf, uint32(msgLen))
 	buf = append(buf, []byte(query)...)
 	buf = append(buf, 0) // Null terminator
-	conn.NetConn.Write(buf)
+	conn.netConn.Write(buf)
+	fmt.Println("Tx status: ", string(conn.txStatus))
 }

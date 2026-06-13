@@ -75,8 +75,8 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	returnConn := &Conn{NetConn: conn} //No need to expose this in client side
-	_, err = returnConn.NetConn.Write(StartUp(DbPool.config.User, DbPool.config.Database))
+	returnConn := &Conn{netConn: conn} //No need to expose this in client side
+	_, err = returnConn.netConn.Write(StartUp(DbPool.config.User, DbPool.config.Database))
 	if err != nil {
 		return nil, err
 	}
@@ -100,13 +100,13 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 			}
 		case byte(ParameterStatus):
 			str := string(msg.Payload)
-			returnConn.Params = append(returnConn.Params, str)
+			returnConn.params = append(returnConn.params, str)
 		case byte(BackendKeyData):
-			returnConn.BackendKeyData.ProcessID = binary.BigEndian.Uint32(msg.Payload[:4])
-			returnConn.BackendKeyData.SecretKey = binary.BigEndian.Uint32(msg.Payload[4:])
+			returnConn.backendKeyData.ProcessID = binary.BigEndian.Uint32(msg.Payload[:4])
+			returnConn.backendKeyData.SecretKey = binary.BigEndian.Uint32(msg.Payload[4:])
 		case byte(ReadyForQuery):
 			value := msg.Payload[0]
-			returnConn.TxStatus = value
+			returnConn.txStatus = value
 			return returnConn, nil
 		case byte(ErrorResponse):
 			DbPool.closeConn(returnConn)
@@ -114,7 +114,7 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 		default:
 			// If the frontend does not support the authentication method requested by the server,
 			// then it should immediately close the connection.
-			returnConn.NetConn.Close()
+			returnConn.netConn.Close()
 			return nil, fmt.Errorf("unsupported message type: %d", msg.Type)
 		}
 	}
@@ -168,7 +168,7 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 
 func (DbPool *DbPool) closeConn(conn *Conn) error {
 	atomic.AddUint32(&DbPool.totalConn, ^uint32(0)) //-1
-	err := conn.NetConn.Close()
+	err := conn.netConn.Close()
 	if err != nil {
 		return err
 	}
