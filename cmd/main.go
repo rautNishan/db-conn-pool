@@ -23,5 +23,5 @@ func main() {
 	if err != nil {
 		fmt.Println("First Error: ", err)
 	}
-	conn.Query("SELECT 1;")
+	conn.Query("SELECT * from test")
 }
