@@ -140,9 +140,7 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 	if !conn.isAlive() {
 		//Close the connection
 		DbPool.closeConn(conn)
-		DbPool.mutx.Lock()
 		conn, err = DbPool.createConnect()
-		DbPool.mutx.Unlock()
 		if err != nil {
 			return DbPool.GetConnetion()
 		}
@@ -150,33 +148,42 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 	//Clouse (Whats being assigned) attatch this function to connection type
 	// So Release can have these
 	conn.release = func(healthy bool) {
-		DbPool.removeConnFromActive(conn)
+		removed := DbPool.removeConnFromActive(conn)
+		fmt.Println("Is healthy: ", healthy)
 		if healthy {
-			DbPool.idelConn <- conn
+			if removed {
+				DbPool.idelConn <- conn
+			}
 			return
 		} else {
 			DbPool.closeConn(conn)
 			return
 		}
 	}
+
 	DbPool.putInActiveConn(conn)
 	conn.addTimeOuts(DbPool.config.IdealConnTimeOut)
 	return conn, nil
 }
 
 func (DbPool *DbPool) closeConn(conn *Conn) error {
+	atomic.AddUint32(&DbPool.totalConn, ^uint32(0)) //-1
 	err := conn.NetConn.Close()
 	if err != nil {
 		return err
 	}
-	atomic.AddUint32(&DbPool.totalConn, ^uint32(0)) //-1
 	return nil
 }
 
-func (DbPool *DbPool) removeConnFromActive(conn *Conn) {
+func (DbPool *DbPool) removeConnFromActive(conn *Conn) bool {
 	DbPool.mutx.Lock()
+	_, ok := DbPool.activeConn[conn]
+	if !ok {
+		return false
+	}
 	delete(DbPool.activeConn, conn)
 	DbPool.mutx.Unlock()
+	return true
 }
 
 func (DbPool *DbPool) putInActiveConn(conn *Conn) {

@@ -376,3 +376,275 @@ func TestConcurrentReuseNeverCreatesExtraConns(t *testing.T) {
 	}
 	t.Log("concurrent reuse OK: connection objects were recycled, never over-created")
 }
+
+func TestReleaseUnhealthy(t *testing.T) {
+	t.Log("=== Testing Release Unhealthy Connection ===")
+
+	pool, err := Init(testConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pool.GetConnetion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("acquired: active=%d, idle=%d, totalConn=%d",
+		len(pool.activeConn), len(pool.idelConn), pool.totalConn)
+
+	// Simulate a broken connection by closing the underlying socket.
+	conn.NetConn.Close()
+
+	idleBefore := len(pool.idelConn)
+	totalBefore := pool.totalConn
+
+	conn.Release()
+
+	t.Logf("after unhealthy release: active=%d, idle=%d, totalConn=%d",
+		len(pool.activeConn), len(pool.idelConn), pool.totalConn)
+
+	if len(pool.activeConn) != 0 {
+		t.Fatal("expected 0 active conns after unhealthy release")
+	}
+	if len(pool.idelConn) != idleBefore {
+		t.Fatalf("idle count should not grow after unhealthy release: before=%d after=%d",
+			idleBefore, len(pool.idelConn))
+	}
+	if pool.totalConn != totalBefore-1 {
+		t.Fatalf("expected totalConn to decrement by 1, before=%d after=%d",
+			totalBefore, pool.totalConn)
+	}
+	t.Log("unhealthy release OK: conn discarded, not returned to idle")
+}
+
+func TestIsAlive(t *testing.T) {
+	t.Log("=== Testing isAlive ===")
+
+	pool, err := Init(testConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pool.GetConnetion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+
+	if !conn.isAlive() {
+		t.Fatal("expected isAlive()=true for a fresh connection")
+	}
+	t.Log("isAlive true: OK")
+
+	// Close the socket and verify the method detects it.
+	conn.NetConn.Close()
+	if conn.isAlive() {
+		t.Fatal("expected isAlive()=false after NetConn.Close()")
+	}
+	t.Log("isAlive false after close: OK")
+}
+
+func TestAddTimeoutBug(t *testing.T) {
+	t.Log("=== Testing addTimeOuts respects config duration ===")
+
+	cfg := testConfig
+	cfg.IdealConnTimeOut = 30 // Init() multiplies by time.Second → 30s
+
+	pool, err := Init(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pool.GetConnetion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Release()
+
+	expectedTimeout := time.Now().Add(30 * time.Second)
+	diff := conn.timeOut.Sub(expectedTimeout)
+	if diff < 0 {
+		diff = -diff
+	}
+
+	t.Logf("conn.timeOut=%v, expected≈%v, diff=%v", conn.timeOut, expectedTimeout, diff)
+
+	if diff > 500*time.Millisecond {
+		t.Fatalf("addTimeOuts ignores its duration arg: expected timeout ~30s from now but got diff=%v\n"+
+			"Fix: change `time.Now().Add(time.Second)` to `time.Now().Add(t)` in addTimeOuts()", diff)
+	}
+	t.Log("addTimeOuts duration OK")
+}
+
+func TestTimeoutSweeper(t *testing.T) {
+	t.Log("=== Testing listenToTimeOuts sweeper ===")
+
+	cfg := testConfig
+	cfg.IdealConnTimeOut = 1 // 1s after Init() multiplier
+
+	pool, err := Init(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pool.GetConnetion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("acquired conn: active=%d", len(pool.activeConn))
+
+	// Force the conn's timeOut into the past so the sweeper sees it as expired.
+	conn.timeOut = time.Now().Add(-2 * time.Second)
+
+	// Wait for at least one sweep tick (interval = IdealConnTimeOut/2 = 500ms).
+	// Sleep a bit longer to avoid flakiness.
+	time.Sleep(800 * time.Millisecond)
+
+	t.Logf("after sweep window: active=%d, idle=%d", len(pool.activeConn), len(pool.idelConn))
+
+	pool.mutx.Lock()
+	activeCount := len(pool.activeConn)
+	pool.mutx.Unlock()
+
+	if activeCount != 0 {
+		t.Fatalf("sweeper did not evict expired connection: active=%d", activeCount)
+	}
+	t.Log("timeout sweeper OK: expired connection evicted from active")
+}
+
+func TestDoubleRelease(t *testing.T) {
+	t.Log("=== Testing Double Release ===")
+
+	cfg := testConfig
+	cfg.MaxConn = 5
+
+	pool, err := Init(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pool.GetConnetion()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn.Release()
+	idleAfterFirst := len(pool.idelConn)
+	t.Logf("after first release: idle=%d", idleAfterFirst)
+
+	// Second Release() — should not panic and should not inflate idle count.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("second Release() panicked: %v", r)
+		}
+	}()
+	conn.Release()
+
+	idleAfterSecond := len(pool.idelConn)
+	t.Logf("after second release: idle=%d", idleAfterSecond)
+
+	if idleAfterSecond > idleAfterFirst {
+		t.Fatalf("double release inflated idle pool: after first=%d after second=%d",
+			idleAfterFirst, idleAfterSecond)
+	}
+	t.Log("double release OK: no panic and idle pool not corrupted")
+}
+
+func TestGetConnectionBlocksUntilReleased(t *testing.T) {
+	t.Log("=== Testing GetConnection blocks until a connection is released ===")
+
+	cfg := testConfig
+	cfg.MinConn = 1
+	cfg.MaxConn = 1
+
+	pool, err := Init(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Hold the only connection.
+	first, err := pool.GetConnetion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Log("first connection acquired, pool exhausted")
+
+	var (
+		second    *Conn
+		secondErr error
+		wg        sync.WaitGroup
+	)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		second, secondErr = pool.GetConnetion() // should block
+	}()
+
+	// Give the goroutine time to block on the idle channel.
+	time.Sleep(50 * time.Millisecond)
+
+	t.Log("releasing first connection...")
+	first.Release()
+
+	// Now the goroutine should unblock within a reasonable time.
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetConnetion() did not unblock after Release() — possible deadlock")
+	}
+
+	if secondErr != nil {
+		t.Fatalf("second GetConnetion() returned error: %v", secondErr)
+	}
+	if second == nil {
+		t.Fatal("second GetConnetion() returned nil connection")
+	}
+	t.Logf("second connection acquired at %p", second)
+	second.Release()
+	t.Log("blocking GetConnetion OK: unblocked after release")
+}
+
+func TestTotalConnAfterCloseAndReacquire(t *testing.T) {
+	t.Log("=== Testing totalConn after closeConn then reacquire ===")
+
+	cfg := testConfig
+	cfg.MinConn = 1
+	cfg.MaxConn = 1
+
+	pool, err := Init(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := pool.GetConnetion()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("acquired: totalConn=%d", pool.totalConn)
+
+	// Close directly — this should decrement totalConn.
+	pool.removeConnFromActive(conn)
+	pool.closeConn(conn)
+	t.Logf("after closeConn: totalConn=%d", pool.totalConn)
+
+	if pool.totalConn != 0 {
+		t.Fatalf("expected totalConn=0 after closeConn, got %d", pool.totalConn)
+	}
+
+	// Now we should be able to create a new connection.
+	newConn, err := pool.createConnect()
+	if err != nil {
+		t.Fatalf("createConnect() failed after closeConn: %v", err)
+	}
+	t.Logf("new connection created: totalConn=%d", pool.totalConn)
+
+	if pool.totalConn != 1 {
+		t.Fatalf("expected totalConn=1 after reacquire, got %d", pool.totalConn)
+	}
+	pool.idelConn <- newConn
+	t.Log("totalConn decrement/reacquire OK")
+}

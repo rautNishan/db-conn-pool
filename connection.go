@@ -98,7 +98,11 @@ func (conn *Conn) readExactly(n int) ([]byte, error) {
 
 func (conn *Conn) Release() {
 	if conn.TxStatus == byte(EmptyQueryResponse) {
-		conn.release(true)
+		if conn.isAlive() {
+			conn.release(true)
+		} else {
+			conn.release(false)
+		}
 		return
 	}
 
@@ -116,7 +120,7 @@ func (conn *Conn) Release() {
 }
 
 func (conn *Conn) addTimeOuts(t time.Duration) {
-	conn.timeOut = time.Now().Add(time.Second)
+	conn.timeOut = time.Now().Add(t)
 }
 
 func (conn *Conn) Query(query string) {
