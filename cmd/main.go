@@ -14,7 +14,7 @@ func main() {
 		Database:         "test",
 		MinConn:          1,
 		MaxConn:          1,
-		IdealConnTimeOut: 10,
+		IdealConnTimeOut: 60,
 	})
 	if err != nil {
 		fmt.Println(err)
@@ -23,5 +23,7 @@ func main() {
 	if err != nil {
 		fmt.Println("First Error: ", err)
 	}
-	conn.Query("SELECT * from test")
+	conn.Query("SELECT 1")
+	fmt.Println("Command sent")
+
 }

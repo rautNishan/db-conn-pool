@@ -15,7 +15,22 @@ const (
 	ReadyForQuery      MessageType = 'Z'
 	ErrorResponse      MessageType = 'E'
 	EmptyQueryResponse MessageType = 'I'
+	CommandComplete    MessageType = 'C'
+	NoticeResponse     MessageType = 'N'
+	RowDescription     MessageType = 'T'
+	DataRow            MessageType = 'D'
+	Close              MessageType = 'C'
 )
+
+type FieldRowDescriptor struct {
+	Name         string
+	TableOID     uint32
+	ColumnAttr   uint16
+	FieldOID     uint32
+	DataTypeSize uint16
+	TypeModifier uint32
+	FormatCode   uint16
+}
 
 type Message struct {
 	Type    byte
@@ -54,7 +69,7 @@ type Conn struct {
 
 func (conn *Conn) isAlive() bool {
 	conn.netConn.SetDeadline(time.Now().Add(1 * time.Millisecond))
-	defer conn.netConn.SetReadDeadline(time.Time{})
+	defer conn.netConn.SetDeadline(time.Time{})
 	buff := make([]byte, 1)
 	_, err := conn.netConn.Read(buff)
 	if err != nil {
@@ -88,7 +103,6 @@ func (conn *Conn) readExactly(n int) ([]byte, error) {
 	for total < n {
 		read, err := conn.netConn.Read(buff[total:])
 		if err != nil {
-			fmt.Println("Erro while reading: ", err)
 			return nil, err
 		}
 		total += read
@@ -97,25 +111,10 @@ func (conn *Conn) readExactly(n int) ([]byte, error) {
 }
 
 func (conn *Conn) Release() {
-	if conn.txStatus == byte(EmptyQueryResponse) {
-		if conn.isAlive() {
-			conn.release(true)
-		} else {
-			conn.release(false)
-		}
-		return
-	}
-
-	for {
-		msg, err := conn.getMessage()
-		if err != nil {
-			conn.release(false)
-			return
-		}
-		if msg.Type == byte(EmptyQueryResponse) {
-			conn.release(true)
-			return
-		}
+	if conn.txStatus == byte(EmptyQueryResponse) && conn.isAlive() {
+		conn.release(true)
+	} else {
+		conn.release(false)
 	}
 }
 
@@ -130,6 +129,78 @@ func (conn *Conn) Query(query string) {
 	buf = binary.BigEndian.AppendUint32(buf, uint32(msgLen))
 	buf = append(buf, []byte(query)...)
 	buf = append(buf, 0) // Null terminator
-	conn.netConn.Write(buf)
-	fmt.Println("Tx status: ", string(conn.txStatus))
+	_, err := conn.netConn.Write(buf)
+	if err != nil {
+		fmt.Println("Error in query: ", err)
+	}
+	conn.getQueryMessage()
+}
+
+func (conn *Conn) getQueryMessage() {
+	for {
+		msg, err := conn.getMessage()
+		if err != nil {
+			fmt.Println("Error while reading...")
+			conn.release(false)
+			return
+		}
+		fmt.Println("Msg type: ", string(msg.Type))
+		conn.txStatus = msg.Type
+		switch msg.Type {
+		case byte(RowDescription):
+			fieldRowDescriptors, err := conn.parseRowDescriptor(msg.Payload)
+			if err != nil {
+				fmt.Println("This is error: ", err)
+			}
+			fmt.Println(fieldRowDescriptors)
+		}
+	}
+}
+
+func (conn *Conn) parseRowDescriptor(payload []byte) ([]FieldRowDescriptor, error) {
+	if len(payload) < 2 {
+		return nil, fmt.Errorf("Wrong payload")
+	}
+	nFields := binary.BigEndian.Uint16(payload[0:2])
+	// fields := make([]FieldRowDescriptor, 0, nFields)
+	offset := 2
+	//For each fields we need to get the value
+	var fields []FieldRowDescriptor
+	for i := 0; i < int(nFields); i++ {
+		//Get name
+		nameStart := offset
+		for offset < len(payload) && payload[offset] != 0 {
+			offset++
+		}
+		name := string(payload[nameStart:offset])
+		offset++ // skip null terminator
+		//Now after name FieldRowDescriptor contains [int32(4 bytes), int16(2 bytes), int32 (4 bytes), int16 (2 bytes), int32(4 bytes), int16 (2 bytes)]
+		remainingSize := 18
+		if offset+remainingSize > len(payload) {
+			return nil, fmt.Errorf("Wrong payload")
+		}
+		tableOid := binary.BigEndian.Uint32(payload[offset : offset+4])
+		offset += 4
+		colAttr := binary.BigEndian.Uint16(payload[offset : offset+2])
+		offset += 2
+		fieldOid := binary.BigEndian.Uint32(payload[offset : offset+4])
+		offset += 4
+		dataTypeSize := binary.BigEndian.Uint16(payload[offset : offset+2])
+		offset += 2
+		typeModifier := binary.BigEndian.Uint32(payload[offset : offset+4])
+		offset += 4
+		formatCode := binary.BigEndian.Uint16(payload[offset : offset+2])
+		offset += 2
+		field := FieldRowDescriptor{
+			TableOID:     tableOid,
+			Name:         name,
+			ColumnAttr:   colAttr,
+			FieldOID:     fieldOid,
+			DataTypeSize: dataTypeSize,
+			TypeModifier: typeModifier,
+			FormatCode:   formatCode,
+		}
+		fields = append(fields, field)
+	}
+	return fields, nil
 }

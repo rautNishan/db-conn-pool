@@ -86,6 +86,7 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 			conn.Close()
 			return nil, err
 		}
+		fmt.Println("message type: ", string(msg.Type))
 		switch msg.Type {
 		case byte(MsgAuthRequest):
 			authType := binary.BigEndian.Uint32(msg.Payload)
@@ -107,7 +108,12 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 		case byte(ReadyForQuery):
 			value := msg.Payload[0]
 			returnConn.txStatus = value
+			fmt.Println("Return cunnection tx status: ", string(returnConn.txStatus))
 			return returnConn, nil
+		case byte(CommandComplete):
+			fmt.Println("Command Complete")
+		case byte(NoticeResponse):
+			fmt.Println("Notice Response")
 		case byte(ErrorResponse):
 			DbPool.closeConn(returnConn)
 			return nil, fmt.Errorf("Error response in message")
