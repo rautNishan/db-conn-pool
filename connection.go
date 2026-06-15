@@ -138,6 +138,7 @@ func (conn *Conn) Query(query string) {
 
 func (conn *Conn) getQueryMessage() {
 	for {
+		fmt.Println("Again")
 		msg, err := conn.getMessage()
 		if err != nil {
 			fmt.Println("Error while reading...")
@@ -153,7 +154,10 @@ func (conn *Conn) getQueryMessage() {
 				fmt.Println("This is error: ", err)
 			}
 			fmt.Println(fieldRowDescriptors)
+		case byte(DataRow):
+			conn.parseDataRow(msg.Payload)
 		}
+
 	}
 }
 
@@ -203,4 +207,22 @@ func (conn *Conn) parseRowDescriptor(payload []byte) ([]FieldRowDescriptor, erro
 		fields = append(fields, field)
 	}
 	return fields, nil
+}
+
+func (conn *Conn) parseDataRow(payload []byte) {
+	nCol := binary.BigEndian.Uint16(payload[:2])
+	offSet := 2
+	fmt.Println("Col number: ", nCol, "Offset: ", offSet)
+	for i := 0; i < int(nCol); i++ {
+		lenColVal := int32(binary.BigEndian.Uint32(payload[offSet : offSet+4])) //Need to cast it to int32 because we can get -1
+		offSet += 4
+		if (lenColVal) == -1 {
+			fmt.Printf("col[%d]: NULL\n", i)
+			continue
+		}
+		fmt.Println("Length of column value: ", lenColVal)
+		val := payload[offSet : offSet+int(lenColVal)]
+		offSet += int(lenColVal)
+		fmt.Println("This is value: ", val)
+	}
 }

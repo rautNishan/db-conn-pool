@@ -120,7 +120,7 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 		default:
 			// If the frontend does not support the authentication method requested by the server,
 			// then it should immediately close the connection.
-			returnConn.netConn.Close()
+			DbPool.closeConn(returnConn)
 			return nil, fmt.Errorf("unsupported message type: %d", msg.Type)
 		}
 	}
