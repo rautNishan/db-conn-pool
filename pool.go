@@ -1,6 +1,7 @@
 package dbconnpool
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -127,16 +128,21 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 
 }
 
-func (DbPool *DbPool) GetConnetion() (*Conn, error) {
+func (DbPool *DbPool) GetConnetion(ctx context.Context) (*Conn, error) {
 	var conn *Conn
 	var err error
+
 	select {
 	case conn = <-DbPool.idelConn:
 	default:
 		conn, err = DbPool.createConnect()
 		if err != nil {
 			if errors.Is(err, ErrMaxConnection) {
-				conn = <-DbPool.idelConn
+				select {
+				case conn = <-DbPool.idelConn:
+				case <-ctx.Done(): //Limits how long the caller waits to acquire a connection
+					return nil, fmt.Errorf("connection acquisition timed out: %w", ctx.Err())
+				}
 			} else {
 				return nil, err
 			}
@@ -148,7 +154,7 @@ func (DbPool *DbPool) GetConnetion() (*Conn, error) {
 		DbPool.closeConn(conn)
 		conn, err = DbPool.createConnect()
 		if err != nil {
-			return DbPool.GetConnetion()
+			return DbPool.GetConnetion(ctx)
 		}
 	}
 	//Clouse (Whats being assigned) attatch this function to connection type

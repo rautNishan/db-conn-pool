@@ -19,7 +19,6 @@ const (
 	NoticeResponse     MessageType = 'N'
 	RowDescription     MessageType = 'T'
 	DataRow            MessageType = 'D'
-	Close              MessageType = 'C'
 )
 
 type FieldRowDescriptor struct {
@@ -67,6 +66,7 @@ type Conn struct {
 	timeOut        time.Time
 }
 
+// TODO fix overriding the timout for the active connection
 func (conn *Conn) isAlive() bool {
 	conn.netConn.SetDeadline(time.Now().Add(1 * time.Millisecond))
 	defer conn.netConn.SetDeadline(time.Time{})
@@ -75,8 +75,10 @@ func (conn *Conn) isAlive() bool {
 	if err != nil {
 		//if time out error then conn is stil alive
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			fmt.Println("Conn is Alive")
 			return true
 		}
+		fmt.Println("Conn is not Alive")
 		return false
 	}
 	return true
@@ -141,12 +143,11 @@ func (conn *Conn) getQueryMessage() {
 		fmt.Println("Again")
 		msg, err := conn.getMessage()
 		if err != nil {
-			fmt.Println("Error while reading...")
+			fmt.Println("Error while reading in getQuery message...", err)
 			conn.release(false)
 			return
 		}
-		fmt.Println("Msg type: ", string(msg.Type))
-		conn.txStatus = msg.Type
+		fmt.Println("This is conn txstatus: ", string(conn.txStatus))
 		switch msg.Type {
 		case byte(RowDescription):
 			fieldRowDescriptors, err := conn.parseRowDescriptor(msg.Payload)
@@ -156,6 +157,13 @@ func (conn *Conn) getQueryMessage() {
 			fmt.Println(fieldRowDescriptors)
 		case byte(DataRow):
 			conn.parseDataRow(msg.Payload)
+		case byte(CommandComplete):
+			conn.commandComplete(msg.Payload)
+		case byte(ReadyForQuery):
+			value := msg.Payload[0]
+			conn.txStatus = value
+			fmt.Println("Final txStatus:", string(conn.txStatus))
+
 		}
 
 	}
@@ -225,4 +233,15 @@ func (conn *Conn) parseDataRow(payload []byte) {
 		offSet += int(lenColVal)
 		fmt.Println("This is value: ", val)
 	}
+}
+
+func (conn *Conn) commandComplete(payload []byte) {
+	offset := 0
+	for offset < len(payload) && payload[offset] != 0 {
+		offset++
+	}
+	cmdTag := payload[:offset]
+	offset += 1 //null terminator
+	fmt.Println("Command tag: ", string(cmdTag))
+
 }

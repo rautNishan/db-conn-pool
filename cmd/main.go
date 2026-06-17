@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	dbconnpool "github.com/rautNishan/db-conn-pool"
@@ -14,12 +15,12 @@ func main() {
 		Database:         "test",
 		MinConn:          1,
 		MaxConn:          1,
-		IdealConnTimeOut: 60,
+		IdealConnTimeOut: 10,
 	})
 	if err != nil {
 		fmt.Println(err)
 	}
-	conn, err := pool.GetConnetion()
+	conn, err := pool.GetConnetion(context.Background()) //Todo need to fix
 	if err != nil {
 		fmt.Println("First Error: ", err)
 	}
