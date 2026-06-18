@@ -161,9 +161,9 @@ func (DbPool *DbPool) GetConnetion(ctx context.Context) (*Conn, error) {
 	// So Release can have these
 	conn.release = func(healthy bool) {
 		removed := DbPool.removeConnFromActive(conn)
-		fmt.Println("Is healthy: ", healthy)
 		if healthy {
 			if removed {
+				conn.status = statusIdeal
 				DbPool.idelConn <- conn
 			}
 			return
@@ -180,6 +180,7 @@ func (DbPool *DbPool) GetConnetion(ctx context.Context) (*Conn, error) {
 
 func (DbPool *DbPool) closeConn(conn *Conn) error {
 	atomic.AddUint32(&DbPool.totalConn, ^uint32(0)) //-1
+	conn.close.Store(true)
 	err := conn.netConn.Close()
 	if err != nil {
 		return err
@@ -189,19 +190,21 @@ func (DbPool *DbPool) closeConn(conn *Conn) error {
 
 func (DbPool *DbPool) removeConnFromActive(conn *Conn) bool {
 	DbPool.mutx.Lock()
+	defer DbPool.mutx.Unlock()
 	_, ok := DbPool.activeConn[conn]
+	conn.status = statusIdeal
 	if !ok {
 		return false
 	}
 	delete(DbPool.activeConn, conn)
-	DbPool.mutx.Unlock()
 	return true
 }
 
 func (DbPool *DbPool) putInActiveConn(conn *Conn) {
 	DbPool.mutx.Lock()
+	defer DbPool.mutx.Unlock()
+	conn.status = statusAcquired
 	DbPool.activeConn[conn] = struct{}{}
-	DbPool.mutx.Unlock()
 }
 
 func (DbPool *DbPool) listenToTimeOuts() {
@@ -213,7 +216,8 @@ func (DbPool *DbPool) listenToTimeOuts() {
 		var expired []*Conn
 		DbPool.mutx.Lock()
 		for key := range DbPool.activeConn {
-			if now.After(key.timeOut) {
+			//If it is still querying no need for release
+			if key.status == statusAcquired && now.After(key.timeOut) {
 				expired = append(expired, key)
 			}
 		}

@@ -2,8 +2,10 @@ package dbconnpool
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,6 +55,14 @@ const (
 	AuthenticationSASLFinal         AuthType = 12
 )
 
+type ConnectionStatus int
+
+const (
+	statusIdeal ConnectionStatus = iota
+	statusAcquired
+	statusQuerying
+)
+
 type BeKeyData struct {
 	ProcessID uint32
 	SecretKey uint32
@@ -64,21 +74,34 @@ type Conn struct {
 	netConn        net.Conn //Only for testing
 	release        func(healthy bool)
 	timeOut        time.Time
+	status         ConnectionStatus
+	close          atomic.Bool
 }
 
-// TODO fix overriding the timout for the active connection
 func (conn *Conn) isAlive() bool {
-	conn.netConn.SetDeadline(time.Now().Add(1 * time.Millisecond))
+	if conn.close.Load() {
+		return false
+	}
+	//Return immediately if it is in querying state
+	// this will also prevent override timeout
+	if conn.status != statusIdeal {
+		return true
+	}
+	err := conn.netConn.SetDeadline(time.Now().Add(1 * time.Millisecond))
 	defer conn.netConn.SetDeadline(time.Time{})
-	buff := make([]byte, 1)
-	_, err := conn.netConn.Read(buff)
 	if err != nil {
+		return false
+	}
+	buff := make([]byte, 1)
+	_, err = conn.netConn.Read(buff)
+	if err != nil {
+		if errors.Is(err, net.ErrClosed) {
+			return false
+		}
 		//if time out error then conn is stil alive
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-			fmt.Println("Conn is Alive")
 			return true
 		}
-		fmt.Println("Conn is not Alive")
 		return false
 	}
 	return true
@@ -135,6 +158,7 @@ func (conn *Conn) Query(query string) {
 	if err != nil {
 		fmt.Println("Error in query: ", err)
 	}
+	conn.status = statusQuerying
 	conn.getQueryMessage()
 }
 
