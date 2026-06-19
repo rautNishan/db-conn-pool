@@ -90,12 +90,25 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 		fmt.Println("message type: ", string(msg.Type))
 		switch msg.Type {
 		case byte(MsgAuthRequest):
-			authType := binary.BigEndian.Uint32(msg.Payload)
+			fmt.Println("Length of payload: ", len(msg.Payload))
+			authType := binary.BigEndian.Uint32(msg.Payload[:4])
+			fmt.Println("Authtype: ", authType)
 			switch AuthType(authType) {
 			case AuthenticationOk:
 				fmt.Println("Auth okay")
 			case AuthenticationKerberosV5:
 				continue //Need to implement later
+			case AuthenticationSASL:
+				fmt.Println("AuthenticationSASL")
+				mechanisms := parseSaslMechanism(msg.Payload)
+				fmt.Println("Mechanisms: ", mechanisms)
+				if len(mechanisms) == 0 {
+					return nil, fmt.Errorf("no supported SASL mechanism in: %v", mechanisms)
+				}
+				fmt.Println("Mechanism: ", mechanisms[0])
+				payload := []byte(mechanisms[0])
+				fmt.Println("This is len of payload: ", len(payload))
+				fmt.Println("Payload: ", string(payload))
 			default:
 				DbPool.closeConn(returnConn)
 				return nil, fmt.Errorf("unsupported auth type: %d", authType)

@@ -1,6 +1,9 @@
 package dbconnpool
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 func StartUp(user, database string) []byte {
 	// A zero byte is required as a terminator after the last name/value pair. (https://www.postgresql.org/docs/current/protocol-message-formats.html)
@@ -19,4 +22,26 @@ func StartUp(user, database string) []byte {
 	buffer = binary.BigEndian.AppendUint32(buffer, version)
 	buffer = append(buffer, payload...)
 	return buffer
+}
+
+func parseSaslMechanism(payload []byte) []string {
+	var mecha []string
+	start := 0
+	end := 0
+	for end < len(payload) {
+		fmt.Println("This is end: ", end)
+		hehe := payload[end]
+		fmt.Println("HEHE: ", string(hehe))
+		if payload[end] == 0 {
+			fmt.Println("Got null terminator and this is end: ", end)
+
+			if start < end {
+				mecha = append(mecha, string(payload[start:end]))
+			}
+			end++ //skip null terminator
+			start = end
+		}
+		end++
+	}
+	return mecha
 }
