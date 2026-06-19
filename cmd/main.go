@@ -18,7 +18,8 @@ func main() {
 		IdealConnTimeOut: 10,
 	})
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("Error in main: ", err)
+		return
 	}
 	conn, err := pool.GetConnetion(context.Background()) //Todo need to fix
 	if err != nil {
