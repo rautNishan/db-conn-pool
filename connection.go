@@ -67,6 +67,12 @@ type BeKeyData struct {
 	ProcessID uint32
 	SecretKey uint32
 }
+
+type SASLState struct {
+	clientFirstMessageBare string
+	clientNonce            string
+	serverKey              []byte
+}
 type Conn struct {
 	txStatus       byte
 	params         []string
@@ -76,6 +82,7 @@ type Conn struct {
 	timeOut        time.Time
 	status         ConnectionStatus
 	close          atomic.Bool
+	saslState      SASLState
 }
 
 func (conn *Conn) isAlive() bool {

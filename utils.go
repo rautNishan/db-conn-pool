@@ -1,6 +1,8 @@
 package dbconnpool
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 )
@@ -29,12 +31,7 @@ func parseSaslMechanism(payload []byte) []string {
 	start := 0
 	end := 0
 	for end < len(payload) {
-		fmt.Println("This is end: ", end)
-		hehe := payload[end]
-		fmt.Println("HEHE: ", string(hehe))
 		if payload[end] == 0 {
-			fmt.Println("Got null terminator and this is end: ", end)
-
 			if start < end {
 				mecha = append(mecha, string(payload[start:end]))
 			}
@@ -44,4 +41,25 @@ func parseSaslMechanism(payload []byte) []string {
 		end++
 	}
 	return mecha
+}
+
+// https://www.postgresql.org/docs/current/sasl-authentication.html
+// https://datatracker.ietf.org/doc/html/rfc5802#section-3
+// https://datatracker.ietf.org/doc/html/rfc5802#section-5
+func buildClientFirstMessage(username string, tlsEnabled bool) (string, string, string, error) {
+	nonceBytes := make([]byte, 24)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return "", "", "", fmt.Errorf("failed to generate nonce: %w", err)
+	}
+	clientNonce := base64.StdEncoding.EncodeToString(nonceBytes)
+	clientFirstMessageBare := fmt.Sprintf("n=%s,r=%s", username, clientNonce)
+	var gs2Header string
+	if tlsEnabled {
+		gs2Header = "y,,"
+	} else {
+		gs2Header = "n,,"
+	}
+	clientFirstMessage := gs2Header + clientFirstMessageBare
+
+	return clientFirstMessage, clientFirstMessageBare, clientNonce, nil
 }

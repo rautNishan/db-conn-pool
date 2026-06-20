@@ -2,10 +2,13 @@ package dbconnpool
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,23 +95,83 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 		case byte(MsgAuthRequest):
 			fmt.Println("Length of payload: ", len(msg.Payload))
 			authType := binary.BigEndian.Uint32(msg.Payload[:4])
+			authOffset := 4
 			fmt.Println("Authtype: ", authType)
 			switch AuthType(authType) {
 			case AuthenticationOk:
 				fmt.Println("Auth okay")
 			case AuthenticationKerberosV5:
 				continue //Need to implement later
-			case AuthenticationSASL:
+			case AuthenticationSASL: //[SASL] https://datatracker.ietf.org/doc/html/rfc4422
 				fmt.Println("AuthenticationSASL")
-				mechanisms := parseSaslMechanism(msg.Payload)
-				fmt.Println("Mechanisms: ", mechanisms)
+				mechanisms := parseSaslMechanism(msg.Payload[authOffset:])
 				if len(mechanisms) == 0 {
 					return nil, fmt.Errorf("no supported SASL mechanism in: %v", mechanisms)
 				}
-				fmt.Println("Mechanism: ", mechanisms[0])
-				payload := []byte(mechanisms[0])
-				fmt.Println("This is len of payload: ", len(payload))
-				fmt.Println("Payload: ", string(payload))
+				//[SCRAM] https://datatracker.ietf.org/doc/html/rfc5802
+				mechanism := mechanisms[0]
+				fmt.Println(mechanism)
+				//Need to better implement this
+				if mechanism == "SCRAM-SHA-256" {
+					//https://www.postgresql.org/docs/current/sasl-authentication.html
+					clientFirstMsg, clientFirstMsgBare, clientNonce, err := buildClientFirstMessage(DbPool.config.User, false)
+					if err != nil {
+						return nil, fmt.Errorf("failed to build client-first-message: %w", err)
+					}
+					returnConn.saslState = SASLState{
+						clientFirstMessageBare: clientFirstMsgBare,
+						clientNonce:            clientNonce,
+					}
+					fmt.Println(clientFirstMsgBare, clientNonce)
+					msgLen := 4 + // length field itself
+						len(mechanism) + 1 + // mechanism name + null terminator
+						4 + // client-first-message length field
+						len(clientFirstMsg) // client-first-message bytes
+					buff := make([]byte, 0, 1+msgLen)
+					buff = append(buff, 'p')
+					buff = binary.BigEndian.AppendUint32(buff, uint32(msgLen))
+					buff = append(buff, []byte(mechanism)...)
+					buff = append(buff, '\x00')
+					buff = binary.BigEndian.AppendUint32(buff, uint32(len(clientFirstMsg)))
+					buff = append(buff, []byte(clientFirstMsg)...)
+					if _, err := returnConn.netConn.Write(buff); err != nil {
+						DbPool.closeConn(returnConn)
+						return nil, fmt.Errorf("failed to send SASLInitialResponse: %w", err)
+					}
+				}
+			//https://datatracker.ietf.org/doc/html/rfc5802#section-3
+			//https://datatracker.ietf.org/doc/html/rfc5802#section-5
+			case AuthenticationSASLContinue:
+				fmt.Println("Continue SASL")
+				saslData := msg.Payload[authOffset:]
+				serverFirstMessage := string(saslData)
+				fmt.Println("Server first data: ", serverFirstMessage)
+				parts := strings.Split(serverFirstMessage, ",")
+				fmt.Println("Parts: ", parts)
+				var serverNonce, saltB64 string
+				var iteration int
+				for _, part := range parts {
+					switch {
+					case strings.HasPrefix(part, "r="):
+						serverNonce = strings.TrimPrefix(part, "r=")
+					case strings.HasPrefix(part, "s="):
+						saltB64 = strings.TrimPrefix(part, "s=")
+					case strings.HasPrefix(part, "i="):
+						iteration, _ = strconv.Atoi(strings.TrimPrefix(part, "i="))
+					}
+				}
+				fmt.Println(serverNonce, saltB64, iteration)
+				fmt.Println(returnConn.saslState.clientNonce)
+				if !strings.HasPrefix(serverNonce, returnConn.saslState.clientNonce) {
+					DbPool.closeConn(returnConn)
+					return nil, fmt.Errorf("server nonce does not start with client nonce")
+				}
+				salt, err := base64.StdEncoding.DecodeString(saltB64)
+				if err != nil {
+					return nil, fmt.Errorf("failed to decode salt: %w", err)
+				}
+				fmt.Println(salt)
+
 			default:
 				DbPool.closeConn(returnConn)
 				return nil, fmt.Errorf("unsupported auth type: %d", authType)
