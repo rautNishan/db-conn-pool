@@ -2,6 +2,8 @@ package dbconnpool
 
 import (
 	"context"
+	"crypto/pbkdf2"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
@@ -141,6 +143,7 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 				}
 			//https://datatracker.ietf.org/doc/html/rfc5802#section-3
 			//https://datatracker.ietf.org/doc/html/rfc5802#section-5
+			//https://csb.stevekerrison.com/post/2022-05-scram-detail/
 			case AuthenticationSASLContinue:
 				fmt.Println("Continue SASL")
 				saslData := msg.Payload[authOffset:]
@@ -171,6 +174,13 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 					return nil, fmt.Errorf("failed to decode salt: %w", err)
 				}
 				fmt.Println(salt)
+
+				//Following the steps from (https://datatracker.ietf.org/doc/html/rfc5802#section-3)
+				saltedPass, err := pbkdf2.Key(sha256.New, DbPool.config.Password, salt, iteration, 32)
+				if err != nil {
+					return nil, fmt.Errorf("Error while getting salted pass: %w", err)
+				}
+				fmt.Println("Salted pass: ", saltedPass)
 
 			default:
 				DbPool.closeConn(returnConn)
