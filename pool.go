@@ -2,6 +2,7 @@ package dbconnpool
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/pbkdf2"
 	"crypto/sha256"
 	"encoding/base64"
@@ -181,6 +182,60 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 					return nil, fmt.Errorf("Error while getting salted pass: %w", err)
 				}
 				fmt.Println("Salted pass: ", saltedPass)
+				returnConn.saslState.saltedPass = saltedPass
+				clientKey := hmac.New(sha256.New, saltedPass)
+				clientKey.Write([]byte("Client Key"))
+				clientKeySum := clientKey.Sum(nil)
+
+				storedKey := sha256.Sum256(clientKeySum)
+				//https://datatracker.ietf.org/doc/html/rfc5802#section-7
+				clientFinalWithoutProof := "c=biws,r=" + serverNonce
+				authMessage := returnConn.saslState.clientFirstMessageBare + "," +
+					serverFirstMessage + "," +
+					clientFinalWithoutProof
+				returnConn.saslState.authMessage = authMessage
+				sig := hmac.New(sha256.New, storedKey[:])
+				sig.Write([]byte(authMessage))
+				clientSignature := sig.Sum(nil)
+				clientProof := make([]byte, len(clientKeySum))
+				for i := range clientKeySum {
+					clientProof[i] = clientKeySum[i] ^ clientSignature[i]
+				}
+				clientFinalMessage := clientFinalWithoutProof + ",p=" +
+					base64.StdEncoding.EncodeToString(clientProof)
+				body := []byte(clientFinalMessage)
+				length := uint32(4 + len(body)) // 4 = the length field counts itself, NOT the tag
+
+				buf := make([]byte, 0, 1+4+len(body))
+				buf = append(buf, 'p')                           // tag
+				buf = binary.BigEndian.AppendUint32(buf, length) // length, big-endian
+				buf = append(buf, body...)                       // payload
+				if _, err := returnConn.netConn.Write(buf); err != nil {
+					return nil, fmt.Errorf("failed to write SASL response: %w", err)
+				}
+			case AuthenticationSASLFinal:
+				completed := binary.BigEndian.Uint32(msg.Payload[0:4])
+				fmt.Println(completed)
+				additionalData := msg.Payload[4:]
+				serverSigB64 := strings.TrimPrefix(string(additionalData), "v=")
+				receivedServerSig, err := base64.StdEncoding.DecodeString(serverSigB64)
+				if err != nil {
+					return nil, fmt.Errorf("failed to decode server signature: %w", err)
+				}
+				serverKeyMAC := hmac.New(sha256.New, returnConn.saslState.saltedPass)
+				serverKeyMAC.Write([]byte("Server Key"))
+				serverKey := serverKeyMAC.Sum(nil)
+
+				serverSigMAC := hmac.New(sha256.New, serverKey)
+				serverSigMAC.Write([]byte(returnConn.saslState.authMessage))
+				expectedServerSig := serverSigMAC.Sum(nil)
+
+				if !hmac.Equal(receivedServerSig, expectedServerSig) {
+					DbPool.closeConn(returnConn)
+					return nil, fmt.Errorf("server signature mismatch — possible MITM or wrong server")
+				}
+				returnConn.saslState = SASLState{}
+				fmt.Println("Server verified")
 
 			default:
 				DbPool.closeConn(returnConn)

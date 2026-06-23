@@ -72,6 +72,8 @@ type SASLState struct {
 	clientFirstMessageBare string
 	clientNonce            string
 	serverKey              []byte
+	saltedPass             []byte
+	authMessage            string
 }
 type Conn struct {
 	txStatus       byte

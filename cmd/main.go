@@ -16,6 +16,7 @@ func main() {
 		MinConn:          1,
 		MaxConn:          1,
 		IdealConnTimeOut: 10,
+		Password:         "test",
 	})
 	if err != nil {
 		fmt.Println("Error in main: ", err)
