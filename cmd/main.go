@@ -28,5 +28,5 @@ func main() {
 	}
 	conn.Query("SELECT 1")
 	fmt.Println("Command sent")
-
+	conn.Release()
 }

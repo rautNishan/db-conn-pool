@@ -57,6 +57,11 @@ const (
 
 type ConnectionStatus int
 
+type Connection interface {
+	Query(query string)
+	Release()
+}
+
 const (
 	statusIdeal ConnectionStatus = iota
 	statusAcquired

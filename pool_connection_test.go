@@ -9,6 +9,18 @@ import (
 	"time"
 )
 
+// asConn unwraps the Connection interface back to *Conn for tests that need
+// access to internal fields (status, timeOut, isAlive, pointer identity).
+// It fails the test immediately if the underlying type is not *Conn.
+func asConn(t *testing.T, c Connection) *Conn {
+	t.Helper()
+	raw, ok := c.(*Conn)
+	if !ok {
+		t.Fatalf("expected *Conn under Connection interface, got %T", c)
+	}
+	return raw
+}
+
 // go test -v ./... 2>&1 | grep -E "^--- (PASS|FAIL)" | sort | uniq -c
 func TestInit(t *testing.T) {
 	t.Log("=== Testing Init ===")
@@ -300,7 +312,8 @@ func TestReleasedConnectionIsReused(t *testing.T) {
 		fmt.Printf("Error while getting conn")
 		t.Fatal(err)
 	}
-	t.Logf("first acquire:  conn at %p, totalConn=%d", conn1, pool.totalConn)
+	raw1 := asConn(t, conn1)
+	t.Logf("first acquire:  conn at %p, totalConn=%d", raw1, pool.totalConn)
 
 	t.Log("releasing it back to the pool...")
 	conn1.Release()
@@ -310,10 +323,11 @@ func TestReleasedConnectionIsReused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("second acquire: conn at %p, totalConn=%d", conn2, pool.totalConn)
+	raw2 := asConn(t, conn2)
+	t.Logf("second acquire: conn at %p, totalConn=%d", raw2, pool.totalConn)
 
-	if conn1 != conn2 {
-		t.Fatalf("pool created a new connection instead of reusing: first=%p, second=%p", conn1, conn2)
+	if raw1 != raw2 {
+		t.Fatalf("pool created a new connection instead of reusing: first=%p, second=%p", raw1, raw2)
 	}
 	if pool.totalConn != 1 {
 		t.Fatalf("expected totalConn to stay at 1, got %d", pool.totalConn)
@@ -351,12 +365,13 @@ func TestConcurrentReuseNeverCreatesExtraConns(t *testing.T) {
 			if err != nil {
 				return
 			}
+			raw := asConn(t, conn)
 			mu.Lock()
-			if _, ok := seenConns[conn]; !ok {
-				seenConns[conn] = struct{}{}
-				t.Logf("goroutine %d: got NEW connection %p (distinct so far: %d)", id, conn, len(seenConns))
+			if _, ok := seenConns[raw]; !ok {
+				seenConns[raw] = struct{}{}
+				t.Logf("goroutine %d: got NEW connection %p (distinct so far: %d)", id, raw, len(seenConns))
 			} else {
-				t.Logf("goroutine %d: got REUSED connection %p", id, conn)
+				t.Logf("goroutine %d: got REUSED connection %p", id, raw)
 			}
 			mu.Unlock()
 
@@ -388,10 +403,11 @@ func TestReleaseUnhealthy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := asConn(t, conn)
 	t.Logf("acquired: active=%d, idle=%d, totalConn=%d",
 		len(pool.activeConn), len(pool.idelConn), pool.totalConn)
 
-	pool.closeConn(conn)
+	pool.closeConn(raw)
 	idleBefore := len(pool.idelConn)
 	totalBefore := pool.totalConn
 
@@ -426,15 +442,16 @@ func TestIsAlive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := asConn(t, conn)
 	defer conn.Release()
 
-	if !conn.isAlive() {
+	if !raw.isAlive() {
 		t.Fatal("expected isAlive()=true for a fresh connection")
 	}
 	t.Log("isAlive true: OK")
-	fmt.Printf("Closing conn: %p\n", conn)
-	pool.closeConn(conn)
-	if conn.isAlive() {
+	fmt.Printf("Closing conn: %p\n", raw)
+	pool.closeConn(raw)
+	if raw.isAlive() {
 		t.Fatal("expected isAlive()=false after NetConn.Close()")
 	}
 	t.Log("isAlive false after close: OK")
@@ -455,15 +472,16 @@ func TestAddTimeoutBug(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := asConn(t, conn)
 	defer conn.Release()
 
 	expectedTimeout := time.Now().Add(30 * time.Second)
-	diff := conn.timeOut.Sub(expectedTimeout)
+	diff := raw.timeOut.Sub(expectedTimeout)
 	if diff < 0 {
 		diff = -diff
 	}
 
-	t.Logf("conn.timeOut=%v, expected≈%v, diff=%v", conn.timeOut, expectedTimeout, diff)
+	t.Logf("conn.timeOut=%v, expected≈%v, diff=%v", raw.timeOut, expectedTimeout, diff)
 
 	if diff > 500*time.Millisecond {
 		t.Fatalf("addTimeOuts ignores its duration arg: expected timeout ~30s from now but got diff=%v\n"+
@@ -487,12 +505,13 @@ func TestTimeoutSweeper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := asConn(t, conn)
 	t.Logf("acquired conn: active=%d", len(pool.activeConn))
 
 	// Force the conn into statusAcquired so the reaper's status check can fire,
 	// then push timeout into the past.
-	conn.status = statusAcquired
-	conn.timeOut = time.Now().Add(-2 * time.Second)
+	raw.status = statusAcquired
+	raw.timeOut = time.Now().Add(-2 * time.Second)
 
 	time.Sleep(800 * time.Millisecond)
 
@@ -523,10 +542,11 @@ func TestSweeperSkipsQueryingConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := asConn(t, conn)
 
 	// Simulate a connection mid-query with an expired timeout.
-	conn.status = statusQuerying
-	conn.timeOut = time.Now().Add(-2 * time.Second)
+	raw.status = statusQuerying
+	raw.timeOut = time.Now().Add(-2 * time.Second)
 
 	// Wait for a full sweep tick.
 	time.Sleep(800 * time.Millisecond)
@@ -541,7 +561,7 @@ func TestSweeperSkipsQueryingConn(t *testing.T) {
 	t.Log("sweeper skip OK: statusQuerying connection was not evicted")
 
 	// Clean up: reset to acquired so Release works normally.
-	conn.status = statusAcquired
+	raw.status = statusAcquired
 	conn.Release()
 }
 
@@ -601,7 +621,7 @@ func TestGetConnectionBlocksUntilReleased(t *testing.T) {
 	t.Log("first connection acquired, pool exhausted")
 
 	var (
-		second    *Conn
+		second    Connection
 		secondErr error
 		wg        sync.WaitGroup
 	)
@@ -632,7 +652,8 @@ func TestGetConnectionBlocksUntilReleased(t *testing.T) {
 	if second == nil {
 		t.Fatal("second GetConnetion() returned nil connection")
 	}
-	t.Logf("second connection acquired at %p", second)
+	raw := asConn(t, second)
+	t.Logf("second connection acquired at %p", raw)
 	second.Release()
 	t.Log("blocking GetConnetion OK: unblocked after release")
 }
@@ -685,10 +706,11 @@ func TestTotalConnAfterCloseAndReacquire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := asConn(t, conn)
 	t.Logf("acquired: totalConn=%d", pool.totalConn)
 
-	pool.removeConnFromActive(conn)
-	pool.closeConn(conn)
+	pool.removeConnFromActive(raw)
+	pool.closeConn(raw)
 	t.Logf("after closeConn: totalConn=%d", pool.totalConn)
 
 	if pool.totalConn != 0 {

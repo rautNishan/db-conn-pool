@@ -269,7 +269,7 @@ func (DbPool *DbPool) createConnect() (*Conn, error) {
 
 }
 
-func (DbPool *DbPool) GetConnetion(ctx context.Context) (*Conn, error) {
+func (DbPool *DbPool) GetConnetion(ctx context.Context) (Connection, error) {
 	var conn *Conn
 	var err error
 
